@@ -1,0 +1,93 @@
+pipeline{
+    agent {
+     label 'worker-01'
+    }
+    
+    options {
+        buildDiscarder logRotator(artifactDaysToKeepStr: '', artifactNumToKeepStr: '', daysToKeepStr: '', numToKeepStr: '5')
+        timestamps()
+    }
+    
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'
+    }
+    
+    parameters {
+        choice choices: ['prod', 'SIT', 'UAT', 'DEV'], name: 'ENV'
+        string defaultValue: 'master', name: 'Branch_name'
+    }
+    
+    tools {
+        git 'Default'
+        jdk 'Java8'
+        maven 'Maven03'
+    }
+    
+    stages {
+        stage('code checkout') {
+            steps {
+               git branch: 'master', credentialsId: 'Git-credentials', url: 'https://github.com/saleem000/petclinic1.git'
+            }
+        }
+
+        stage('test and scan') {
+            parallel {
+                stage("test"){
+                    steps{
+                        sh "mvn test"
+                    }
+                }
+                stage("sonar scan") {
+                    steps{
+                        withSonarQubeEnv(installationName: 'Sonarqube-server') {
+                        sh "$SCANNER_HOME/bin/sonar-scanner -Dproject.settings=sonar-project.properties"
+                    }
+                }    
+            }
+        }
+
+    }
+    
+        stage("build code"){
+            steps{
+                sh "mvn clean package "
+            }
+            
+        }
+        
+        stage("build image and push"){
+            
+            steps{
+                //withCredentials([usernamePassword(credentialsId: 'nexus-credentials', passwordVariable: 'password', usernameVariable: 'user')]) {
+                
+                    sh 'sudo docker image build -t ec2-3-16-137-150.us-east-2.compute.amazonaws.com:10001/petimage/petclinic:1.0.${BUILD_ID} . '
+                    sh 'sudo docker login -u admin -p admin123 ec2-3-16-137-150.us-east-2.compute.amazonaws.com:10001/petimage/petclinic:1.0.${BUILD_ID} '
+                    //sh 'sudo docker login -u{user} -p{password} ec2-3-16-137-150.us-east-2.compute.amazonaws.com:10001/petimage/petclinic:1.0.${BUILD_ID}'
+                    // sh 'sudo docker image tag ec2-3-16-137-150.us-east-2.compute.amazonaws.com:10001/petimage/petclinic:1.0.${BUILD_ID} petimage/petclinic:1.0.${BUILD_ID} '
+                    sh 'sudo docker image push ec2-3-16-137-150.us-east-2.compute.amazonaws.com:10001/petimage/petclinic:1.0.${BUILD_ID}'
+               // }
+            }
+        }
+        stage("deploy to k8s"){
+            steps{
+                //echo 'deploy to k8s'
+                sh "kubectl apply -f /home/ubuntu/kubernetes/petclinic/deployment.yaml --kubeconfig=/home/ubuntu/kubernetes/config/kubeconfig"
+            }
+        }
+        
+    }   
+    
+    
+post {
+  always {
+    echo "kubernetes job"
+  }
+  success {
+    echo "Only runs when its successful"
+  }
+  failure {
+    echo "Only runs when the Job has failed"
+  }
+
+}
+}
